@@ -50,7 +50,7 @@ public class VirtualAssistant {
         System.out.println("1) What is the Time ?");
         System.out.println("2) Make schedule for the day");
         System.out.println("3) Show schedule");
-        System.out.println("4K) Edit schedule");
+        System.out.println("4) Edit schedule");
         System.out.println("5) Mark accomplished tasks & show progress");
         System.out.println("6) Exit");
     }
