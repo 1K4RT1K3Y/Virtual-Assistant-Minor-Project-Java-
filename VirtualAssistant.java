@@ -14,7 +14,80 @@ public class VirtualAssistant {
 
     private void start() {
         greetAndGetName();
+        startReminderThread();
         mainLoop();
+    }
+
+    // Reminder thread: notifies 5 minutes before a task start and reminds for breaks
+    private void startReminderThread() {
+        // Use a background daemon thread so it doesn't block program exit
+        Thread reminder = new Thread(() -> {
+            // Track which task start reminders we've already shown (by id)
+            final Set<java.util.UUID> remindedStarts = Collections.synchronizedSet(new HashSet<>());
+            // Track when focused work started (epoch seconds) to detect 1 hour continuous work
+            long focusedStart = -1L;
+            while (true) {
+                try {
+                    LocalDate today = LocalDate.now();
+                    LocalDateTime now = LocalDateTime.now();
+                    List<Task> todays = schedules.getOrDefault(today, Collections.emptyList());
+                    // Sort tasks by start time if available
+                    List<Task> sorted = todays.stream()
+                            .filter(t -> t.getStartTime() != null)
+                            .sorted(Comparator.comparing(Task::getStartTime))
+                            .collect(Collectors.toList());
+
+                    boolean anyTaskInProgress = false;
+                    for (Task t : sorted) {
+                        if (t.isDone()) continue;
+                        LocalTime st = t.getStartTime();
+                        LocalTime et = t.getEndTime();
+                        if (st == null) continue;
+                        LocalDateTime taskStart = LocalDateTime.of(today, st);
+                        LocalDateTime taskEnd = et == null ? taskStart.plusMinutes(t.getDurationMinutes()) : LocalDateTime.of(today, et);
+
+                        // Reminder 5 minutes before start
+                        if (!remindedStarts.contains(t.getId())) {
+                            LocalDateTime remindAt = taskStart.minusMinutes(5);
+                            if (!now.isBefore(remindAt) && now.isBefore(taskStart)) {
+                                System.out.println("\n[Reminder] Upcoming task in 5 minutes: " + t.getTitle() + " (starts at " + st + ")");
+                                remindedStarts.add(t.getId());
+                            }
+                        }
+
+                        // If task currently in progress
+                        if (!now.isBefore(taskStart) && now.isBefore(taskEnd)) {
+                            anyTaskInProgress = true;
+                        }
+                    }
+
+                    // Break reminder: if continuous focused work reaches 60 minutes, remind and reset
+                    if (anyTaskInProgress) {
+                        if (focusedStart == -1L) focusedStart = Instant.now().getEpochSecond();
+                        long elapsedSeconds = Instant.now().getEpochSecond() - focusedStart;
+                        if (elapsedSeconds >= 60 * 60) {
+                            System.out.println("[Break Reminder] You've been focused for 1 hour. Take a 5-10 minute break.");
+                            // reset focusedStart to now so reminder repeats after another hour
+                            focusedStart = Instant.now().getEpochSecond();
+                        }
+                    } else {
+                        // no active task — reset focused timer
+                        focusedStart = -1L;
+                    }
+
+                    Thread.sleep(30 * 1000); // check every 30 seconds
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception ex) {
+                    // Keep the thread alive on other exceptions
+                    System.out.println("[Reminder Thread Error] " + ex.getMessage());
+                    try { Thread.sleep(30 * 1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                }
+            }
+        }, "VA-Reminder-Thread");
+        reminder.setDaemon(true);
+        reminder.start();
     }
 
     private void greetAndGetName() {
@@ -46,13 +119,13 @@ public class VirtualAssistant {
     }
 
     private void printMainMenu() {
-        System.out.println("----- Main Menu -----");
-        System.out.println("1) What is the Time ?");
+        System.out.println("\n----- Main Menu -----");
+        System.out.println("\n1) What is the Time ?");
         System.out.println("2) Make schedule for the day");
         System.out.println("3) Show schedule");
-        System.out.println("4git commit -m ) Edit schedule");
+        System.out.println("4) Edit schedule");
         System.out.println("5) Mark accomplished tasks & show progress");
-        System.out.println("6) Exit");
+        System.out.println("6) Exit\n");
     }
 
     // Option 1
@@ -60,9 +133,9 @@ public class VirtualAssistant {
         LocalDateTime now = LocalDateTime.now();
         DateTimeFormatter dtf = DateTimeFormatter.ofPattern("EEEE, MMM dd, yyyy");
         DateTimeFormatter tf = DateTimeFormatter.ofPattern("hh:mm:ss a");
-        System.out.println("Current date: " + now.format(dtf));
-        System.out.println("Current time: " + now.format(tf));
-        System.out.println("Day of week: " + now.getDayOfWeek());
+        System.out.println("\nCurrent date: " + now.format(dtf));
+        System.out.println("\nCurrent time: " + now.format(tf));
+        System.out.println("\nDay of week: " + now.getDayOfWeek() + "\n");
     }
 
     // Option 2
@@ -87,16 +160,58 @@ public class VirtualAssistant {
     }
 
     private void addTaskToList(List<Task> tasks) {
-        System.out.print("Task title: ");
+        System.out.print("\nTask title: ");
         String title = in.nextLine().trim();
         if (title.isEmpty()) {
-            System.out.println("Task cannot be empty.");
+            System.out.println("\nTask cannot be empty.\n");
             return;
         }
-        int duration = readInt("Estimated duration in minutes (integer): ");
-        Task t = new Task(title, duration);
+        System.out.println("\nEnter start time in 24-hour format HH:mm (e.g., 09:30): ");
+        LocalTime start = readTime("Start time (HH:mm): ");
+        System.out.println("\nEnter end time in 24-hour format HH:mm (e.g., 10:15). Leave blank if unknown:");
+        LocalTime end = readTimeAllowBlank("End time (HH:mm) or blank: ");
+        
+        // Validate end time is after start time
+        if (end != null && !end.isAfter(start)) {
+            System.out.println("\nEnd time must be after start time. Task not added.\n");
+            return;
+        }
+
+        // Check for overlaps
+        if (hasOverlap(tasks, start, end, null)) {
+            System.out.println("\nWarning: This time slot overlaps with an existing task!");
+            int duration = end != null ? (int)Duration.between(start, end).toMinutes() : 60; // default 1 hour
+            LocalTime nextSlot = findNextAvailableSlot(tasks, duration);
+            
+            if (nextSlot != null) {
+                System.out.println("\nNext available slot: " + nextSlot + " - " + nextSlot.plusMinutes(duration));
+                System.out.print("\nWould you like to use this slot instead? (y/n): ");
+                String answer = in.nextLine().trim().toLowerCase();
+                if (answer.startsWith("y")) {
+                    start = nextSlot;
+                    end = nextSlot.plusMinutes(duration);
+                } else {
+                    System.out.print("\nWould you like to add the task anyway? (y/n): ");
+                    answer = in.nextLine().trim().toLowerCase();
+                    if (!answer.startsWith("y")) {
+                        System.out.println("\nTask not added.\n");
+                        return;
+                    }
+                }
+            } else {
+                System.out.println("\nNo available slots found today. Consider scheduling for another day.");
+                System.out.print("\nWould you like to add the task anyway? (y/n): ");
+                String answer = in.nextLine().trim().toLowerCase();
+                if (!answer.startsWith("y")) {
+                    System.out.println("\nTask not added.\n");
+                    return;
+                }
+            }
+        }
+        
+        Task t = new Task(title, start, end);
         tasks.add(t);
-        System.out.println("Added: " + t);
+        System.out.println("\nAdded: " + t + "\n");
     }
 
     // Option 3
@@ -109,8 +224,8 @@ public class VirtualAssistant {
         }
         while (true) {
             System.out.println("Editing schedule for " + date);
-            //printTasksBrief(tasks);
-            System.out.println("1) Add task");
+            printTasksBrief(tasks);
+            System.out.println("\n\n1) Add task");
             System.out.println("2) Delete task");
             System.out.println("3) Modify task");
             System.out.println("4) Back to main menu");
@@ -149,17 +264,52 @@ public class VirtualAssistant {
         System.out.print("New title (leave blank to keep): ");
         String title = in.nextLine().trim();
         if (!title.isEmpty()) t.setTitle(title);
-        String durStr;
-        System.out.print("New duration in minutes (leave blank to keep): ");
-        durStr = in.nextLine().trim();
-        if (!durStr.isEmpty()) {
+        System.out.print("New start time (HH:mm) (leave blank to keep): ");
+        String newStart = in.nextLine().trim();
+        LocalTime newStartTime = null;
+        if (!newStart.isEmpty()) {
             try {
-                int d = Integer.parseInt(durStr);
-                t.setDurationMinutes(d);
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid number. Duration unchanged.");
+                newStartTime = LocalTime.parse(newStart);
+            } catch (Exception e) {
+                System.out.println("Invalid time format. Start time unchanged.");
             }
         }
+
+        System.out.print("New end time (HH:mm) (leave blank to keep or enter blank to unset): ");
+        String newEnd = in.nextLine().trim();
+        LocalTime newEndTime = null;
+        if (!newEnd.isEmpty()) {
+            try {
+                newEndTime = LocalTime.parse(newEnd);
+            } catch (Exception e) {
+                System.out.println("Invalid time format. End time unchanged.");
+            }
+        }
+
+        // Use existing times if new ones weren't provided
+        LocalTime finalStart = newStartTime != null ? newStartTime : t.getStartTime();
+        LocalTime finalEnd = newEndTime != null ? newEndTime : t.getEndTime();
+
+        // Validate times if both are provided
+        if (finalStart != null && finalEnd != null && !finalEnd.isAfter(finalStart)) {
+            System.out.println("End time must be after start time. Times not updated.");
+            return;
+        }
+
+        // Check for overlaps with other tasks
+        if (hasOverlap(tasks, finalStart, finalEnd, t)) {
+            System.out.println("Warning: These times would overlap with another task!");
+            System.out.print("Would you like to update anyway? (y/n): ");
+            String answer = in.nextLine().trim().toLowerCase();
+            if (!answer.startsWith("y")) {
+                System.out.println("Times not updated.");
+                return;
+            }
+        }
+
+        // Update times if we got here
+        if (newStartTime != null) t.setStartTime(newStartTime);
+        if (newEndTime != null) t.setEndTime(newEndTime);
         System.out.println("Modified: " + t);
     }
 
@@ -268,13 +418,14 @@ public class VirtualAssistant {
         long total = tasks.size();
         long done = tasks.stream().filter(Task::isDone).count();
         double percent = total == 0 ? 100.0 : (done * 100.0 / total);
-        System.out.println("Progress: " + done + " / " + total + " tasks completed (" +
-                String.format("%.1f", percent) + "%)");
+        System.out.println("\nProgress: " + done + " / " + total + " tasks completed (" +
+                String.format("%.1f", percent) + "%)\n");
         if (done < total) {
             System.out.println("Pending tasks:");
-            tasks.stream().filter(t -> !t.isDone()).forEach(t -> System.out.println(" - " + t.getTitle()));
+            tasks.stream().filter(t -> !t.isDone()).forEach(t -> System.out.println("\n - " + t.getTitle()));
+            System.out.println();
         } else {
-            System.out.println("All tasks completed. Good job!");
+            System.out.println("\nAll tasks completed. Good job!\n");
         }
     }
 
@@ -291,6 +442,31 @@ public class VirtualAssistant {
         }
     }
 
+    private LocalTime readTime(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String s = in.nextLine().trim();
+            try {
+                return LocalTime.parse(s);
+            } catch (Exception e) {
+                System.out.println("Invalid time. Please use HH:mm (24-hour).");
+            }
+        }
+    }
+
+    private LocalTime readTimeAllowBlank(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String s = in.nextLine().trim();
+            if (s.isEmpty()) return null;
+            try {
+                return LocalTime.parse(s);
+            } catch (Exception e) {
+                System.out.println("Invalid time. Please use HH:mm (24-hour) or leave blank.");
+            }
+        }
+    }
+
     private int readInt(String prompt) {
         while (true) {
             System.out.print(prompt);
@@ -303,63 +479,137 @@ public class VirtualAssistant {
         }
     }
 
+    // Time slot management helpers
+    private boolean hasOverlap(List<Task> tasks, LocalTime start, LocalTime end, Task excludeTask) {
+        if (start == null || end == null) return false;
+        return tasks.stream()
+                .filter(t -> t != excludeTask && !t.isDone()) // ignore done tasks and the task being modified
+                .filter(t -> t.getStartTime() != null && t.getEndTime() != null)
+                .anyMatch(t -> {
+                    // Check if either start or end time falls within another task's time range
+                    return (!start.isAfter(t.getEndTime()) && !end.isBefore(t.getStartTime()));
+                });
+    }
+
+    private LocalTime findNextAvailableSlot(List<Task> tasks, int durationMinutes) {
+        if (tasks.isEmpty()) return LocalTime.of(9, 0); // Default to 9 AM if no tasks
+
+        // Get all tasks with times, sorted by start time
+        List<Task> scheduledTasks = tasks.stream()
+                .filter(t -> !t.isDone() && t.getStartTime() != null && t.getEndTime() != null)
+                .sorted(Comparator.comparing(Task::getStartTime))
+                .collect(Collectors.toList());
+
+        if (scheduledTasks.isEmpty()) return LocalTime.of(9, 0);
+
+        // Start with work day beginning (9 AM)
+        LocalTime slot = LocalTime.of(9, 0);
+        
+        // Try each potential slot
+        for (Task task : scheduledTasks) {
+            // If there's room before this task
+            LocalTime taskStart = task.getStartTime();
+            if (slot.plusMinutes(durationMinutes).isBefore(taskStart) || 
+                slot.plusMinutes(durationMinutes).equals(taskStart)) {
+                return slot; // We found a slot that fits
+            }
+            // Move to end of current task
+            slot = task.getEndTime();
+        }
+
+        // If we get here, try after the last task
+        if (slot.plusMinutes(durationMinutes).isBefore(LocalTime.of(17, 0))) {
+            return slot; // Return slot after last task if it ends before 5 PM
+        }
+
+        // No slot found today
+        return null;
+    }
+
     private void printTasksBrief(List<Task> tasks) {
+        System.out.println();  // Add space before task list
         for (int i = 0; i < tasks.size(); i++) {
             Task t = tasks.get(i);
-            System.out.printf("%d) %s %s%n", i + 1, t.getTitle(), t.isDone() ? "[DONE]" : "");
+            String times = (t.getStartTime() == null ? "" : t.getStartTime().toString()) + (t.getEndTime() == null ? "" : "-" + t.getEndTime().toString());
+            System.out.printf("%d) %s %s %s%n", i + 1, t.getTitle(), times.isEmpty() ? "" : "(" + times + ")", t.isDone() ? "[DONE]" : "");
         }
+        System.out.println();  // Add space after task list
     }
 
     private void printTasksDetailed(List<Task> tasks) {
-        System.out.println("Full schedule:");
+        System.out.println("\nFull schedule:\n");
         for (int i = 0; i < tasks.size(); i++) {
             Task t = tasks.get(i);
-            System.out.printf("%d) %s | %d min | %s%n", i + 1, t.getTitle(), t.getDurationMinutes(),
+            String start = t.getStartTime() == null ? "--" : t.getStartTime().toString();
+            String end = t.getEndTime() == null ? "--" : t.getEndTime().toString();
+            System.out.printf("%d) %s | %s - %s | %d min | %s%n", i + 1, t.getTitle(), start, end, t.getDurationMinutes(),
                     t.isDone() ? "DONE" : "PENDING");
         }
         int totalDuration = tasks.stream().mapToInt(Task::getDurationMinutes).sum();
-        System.out.println("Total tasks: " + tasks.size() + " | Total estimated minutes: " + totalDuration);
+        System.out.println("\nTotal tasks: " + tasks.size() + " | Total estimated minutes: " + totalDuration + "\n");
     }
 
     // Task class
     private static class Task {
+        private final java.util.UUID id;
         private String title;
+        // optional fallback duration (minutes) if times are not provided
         private int durationMinutes;
+        private LocalTime startTime;
+        private LocalTime endTime;
         private boolean done;
 
-        Task(String title, int durationMinutes) {
+        Task(String title, LocalTime startTime, LocalTime endTime) {
+            this.id = java.util.UUID.randomUUID();
             this.title = title;
-            this.durationMinutes = Math.max(0, durationMinutes);
+            this.startTime = startTime;
+            this.endTime = endTime;
+            this.durationMinutes = 0;
             this.done = false;
         }
 
-        String getTitle() {
-            return title;
+        // Legacy constructor (kept for safety) - will set durationMinutes only
+        Task(String title, int durationMinutes) {
+            this.id = java.util.UUID.randomUUID();
+            this.title = title;
+            this.durationMinutes = Math.max(0, durationMinutes);
+            this.startTime = null;
+            this.endTime = null;
+            this.done = false;
         }
 
-        void setTitle(String title) {
-            this.title = title;
-        }
+        java.util.UUID getId() { return id; }
+
+        String getTitle() { return title; }
+
+        void setTitle(String title) { this.title = title; }
+
+        LocalTime getStartTime() { return startTime; }
+
+        void setStartTime(LocalTime startTime) { this.startTime = startTime; }
+
+        LocalTime getEndTime() { return endTime; }
+
+        void setEndTime(LocalTime endTime) { this.endTime = endTime; }
 
         int getDurationMinutes() {
+            if (startTime != null && endTime != null) {
+                long mins = java.time.Duration.between(startTime, endTime).toMinutes();
+                return (int)Math.max(0, mins);
+            }
             return durationMinutes;
         }
 
-        void setDurationMinutes(int durationMinutes) {
-            this.durationMinutes = Math.max(0, durationMinutes);
-        }
+        void setDurationMinutes(int durationMinutes) { this.durationMinutes = Math.max(0, durationMinutes); }
 
-        boolean isDone() {
-            return done;
-        }
+        boolean isDone() { return done; }
 
-        void setDone(boolean done) {
-            this.done = done;
-        }
+        void setDone(boolean done) { this.done = done; }
 
         @Override
         public String toString() {
-            return title + " (" + durationMinutes + " min) " + (done ? "[DONE]" : "[PENDING]");
+            String times = (startTime == null ? "" : startTime.toString()) + (endTime == null ? "" : "-" + endTime.toString());
+            return title + (times.isEmpty() ? "" : " (" + times + ")") + " (" + getDurationMinutes() + " min) " + (done ? "[DONE]" : "[PENDING]");
         }
     }
 }
