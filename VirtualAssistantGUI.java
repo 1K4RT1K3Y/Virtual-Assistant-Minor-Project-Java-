@@ -31,6 +31,9 @@ public class VirtualAssistantGUI extends JFrame {
     private float hue = 0;
     private SystemTray tray;
     private TrayIcon trayIcon;
+    // Manual focus controls (user can start/stop a focus timer)
+    private volatile boolean manualFocusRunning = false;
+    private volatile long manualFocusStart = -1L;
 
     public static void main(String[] args) {
         try {
@@ -191,6 +194,30 @@ public class VirtualAssistantGUI extends JFrame {
         addStyledButton(buttonPanel, "Add Task", this::showAddTaskDialog);
         addStyledButton(buttonPanel, "View Schedule", this::showViewScheduleDialog);
         addStyledButton(buttonPanel, "Launch App", this::showAppLauncherDialog);
+        // Add a manual focus toggle button to let user start a focus timer
+        JButton focusBtn = new JButton("Start Focus");
+        focusBtn.setFont(new Font("Arial", Font.BOLD, 14));
+        focusBtn.setBackground(new Color(230, 126, 34)); // orange
+        focusBtn.setForeground(Color.WHITE);
+        focusBtn.setOpaque(true);
+        focusBtn.setContentAreaFilled(true);
+        focusBtn.setBorderPainted(false);
+        focusBtn.setFocusPainted(false);
+        focusBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        focusBtn.addActionListener(e -> {
+            if (!manualFocusRunning) {
+                manualFocusRunning = true;
+                manualFocusStart = Instant.now().getEpochSecond();
+                focusBtn.setText("Stop Focus");
+                showNotification("Focus", "Manual focus timer started.", MessageType.INFO);
+            } else {
+                manualFocusRunning = false;
+                manualFocusStart = -1L;
+                focusBtn.setText("Start Focus");
+                showNotification("Focus", "Manual focus timer stopped.", MessageType.INFO);
+            }
+        });
+        buttonPanel.add(focusBtn);
 
         mainPanel.add(buttonPanel, BorderLayout.SOUTH);
 
@@ -248,9 +275,9 @@ public class VirtualAssistantGUI extends JFrame {
         gbc.insets = new Insets(8, 12, 8, 12);
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
-        JLabel prompt = new JLabel("What's your first name?");
-        prompt.setForeground(Color.WHITE);
-        prompt.setFont(new Font("Arial", Font.BOLD, 16));
+    JLabel prompt = new JLabel("What's your first name?");
+    prompt.setForeground(Color.WHITE);
+    prompt.setFont(new Font("Arial", Font.BOLD, 18));
         gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
         d.add(prompt, gbc);
 
@@ -260,7 +287,7 @@ public class VirtualAssistantGUI extends JFrame {
         gbc.gridy = 1; gbc.gridwidth = 2;
         d.add(fname, gbc);
 
-        JButton save = createStyledButton("Save");
+        JButton save = createStyledButton("OK");
         JButton skip = createStyledButton("Skip");
 
         save.addActionListener(ev -> {
@@ -311,6 +338,284 @@ public class VirtualAssistantGUI extends JFrame {
         greetingHideTimer.start();
     }
 
+    /**
+     * Show a startup dialog for configuring break reminders.
+     * User can enable/disable break notifications and set preferences.
+     * After this dialog closes, the relaxation session dialog appears.
+     */
+    private void showBreakReminderDialog() {
+        JDialog d = new JDialog(this, "Break Reminder Setup", true);
+        d.setLayout(new GridBagLayout());
+        d.getContentPane().setBackground(Colors.PANEL_BG);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(12, 12, 12, 12);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel prompt = new JLabel("Break Reminder Preferences");
+        prompt.setForeground(Color.WHITE);
+        prompt.setFont(new Font("Arial", Font.BOLD, 18));
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        d.add(prompt, gbc);
+
+        JLabel desc = new JLabel("<html>Enable reminders to take breaks every 60 minutes of focus.<br>You'll also get alerts 5 minutes before each task ends.</html>");
+        desc.setForeground(new Color(200, 200, 200));
+        desc.setFont(new Font("Arial", Font.PLAIN, 13));
+        gbc.gridy = 1; gbc.insets = new Insets(8, 12, 12, 12);
+        d.add(desc, gbc);
+
+        // Enable/disable checkbox
+        JCheckBox enableBreakReminders = new JCheckBox("Enable break reminders", true);
+        enableBreakReminders.setBackground(Colors.PANEL_BG);
+        enableBreakReminders.setForeground(Color.WHITE);
+        enableBreakReminders.setFont(new Font("Arial", Font.PLAIN, 13));
+        gbc.gridy = 2; gbc.insets = new Insets(12, 12, 8, 12);
+        d.add(enableBreakReminders, gbc);
+
+        // Break interval label and spinner
+        JLabel intervalLabel = new JLabel("Break interval (minutes):");
+        intervalLabel.setForeground(Color.WHITE);
+        intervalLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1; gbc.insets = new Insets(8, 12, 8, 12);
+        d.add(intervalLabel, gbc);
+
+        SpinnerModel intervalModel = new SpinnerNumberModel(60, 15, 120, 5);
+        JSpinner intervalSpinner = createStyledSpinner(intervalModel);
+        gbc.gridx = 1; gbc.gridy = 3;
+        d.add(intervalSpinner, gbc);
+
+        // Confirm button
+        JButton confirmBtn = createStyledButton("Continue");
+        confirmBtn.addActionListener(ev -> {
+            // TODO: Store user preferences if needed
+            d.dispose();
+            // Show relaxation session dialog after break reminder setup
+            new javax.swing.Timer(500, timer -> {
+                ((javax.swing.Timer) timer.getSource()).stop();
+                showRelaxationSessionDialog();
+            }).start();
+        });
+
+        // Skip button
+        JButton skipBtn = createStyledButton("Skip");
+        skipBtn.addActionListener(ev -> {
+            d.dispose();
+            // Show relaxation session dialog after skipping break setup
+            new javax.swing.Timer(500, timer -> {
+                ((javax.swing.Timer) timer.getSource()).stop();
+                showRelaxationSessionDialog();
+            }).start();
+        });
+
+        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 1; gbc.insets = new Insets(20, 12, 12, 12);
+        d.add(confirmBtn, gbc);
+        gbc.gridx = 1;
+        d.add(skipBtn, gbc);
+
+        d.pack();
+        d.setLocationRelativeTo(this);
+        d.setVisible(true);
+    }
+
+    /**
+     * Show a startup dialog offering a guided 5-minute relaxation session.
+     * User can Start, Skip, or Schedule for later.
+     */
+    private void showRelaxationSessionDialog() {
+        JDialog d = new JDialog(this, "Relaxation Session", true);
+        d.setLayout(new GridBagLayout());
+        d.getContentPane().setBackground(Colors.PANEL_BG);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(12, 12, 12, 12);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel prompt = new JLabel("Take a 5-minute break to relax?");
+        prompt.setForeground(Color.WHITE);
+        prompt.setFont(new Font("Arial", Font.BOLD, 18));
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 3;
+        d.add(prompt, gbc);
+
+        JLabel desc = new JLabel("<html>4-step guided session: hydrate, breathe, stretch, refocus.<br>Perfect for mental clarity and focus.</html>");
+        desc.setForeground(new Color(200, 200, 200));
+        desc.setFont(new Font("Arial", Font.PLAIN, 13));
+        gbc.gridy = 1; gbc.insets = new Insets(8, 12, 12, 12);
+        d.add(desc, gbc);
+
+        // Start button
+        JButton startBtn = createStyledButton("Start Now");
+        startBtn.addActionListener(ev -> {
+            d.dispose();
+            showRelaxationSessionWindow();
+        });
+
+        // Skip button
+        JButton skipBtn = createStyledButton("Skip");
+        skipBtn.addActionListener(ev -> {
+            d.dispose();
+        });
+
+        // Schedule button
+        JButton scheduleBtn = createStyledButton("Schedule Later");
+        scheduleBtn.addActionListener(ev -> {
+            showNotification("Relaxation", 
+                           "You can start a relaxation session anytime from the app menu.", 
+                           MessageType.INFO);
+            d.dispose();
+        });
+
+        gbc.gridwidth = 1; gbc.gridy = 2; gbc.gridx = 0; gbc.insets = new Insets(12, 12, 12, 12);
+        d.add(startBtn, gbc);
+        gbc.gridx = 1; d.add(skipBtn, gbc);
+        gbc.gridx = 2; d.add(scheduleBtn, gbc);
+
+        d.pack();
+        d.setLocationRelativeTo(this);
+        d.setVisible(true);
+    }
+
+    /**
+     * Show a window with the 5-minute guided relaxation session.
+     * Displays step-by-step instructions with live countdown timers.
+     */
+    private void showRelaxationSessionWindow() {
+        JFrame sessionFrame = new JFrame("Guided Relaxation Session");
+        sessionFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        sessionFrame.setSize(500, 600);
+        sessionFrame.setLocationRelativeTo(this);
+        sessionFrame.getContentPane().setBackground(Colors.PANEL_BG);
+        sessionFrame.setLayout(new BorderLayout(12, 12));
+
+        // Header
+        JLabel title = new JLabel("5-Minute Relaxation Session");
+        title.setFont(new Font("Arial", Font.BOLD, 20));
+        title.setForeground(Color.WHITE);
+        title.setHorizontalAlignment(SwingConstants.CENTER);
+        JPanel headerPanel = new JPanel();
+        headerPanel.setBackground(Colors.PANEL_BG);
+        headerPanel.add(title);
+        sessionFrame.add(headerPanel, BorderLayout.NORTH);
+
+        // Content panel (steps + timer)
+        JPanel contentPanel = new JPanel();
+        contentPanel.setLayout(new BoxLayout(contentPanel, BoxLayout.Y_AXIS));
+        contentPanel.setBackground(Colors.PANEL_BG);
+        contentPanel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+        JLabel stepLabel = new JLabel("Step 1: Hydrate & Settle");
+        stepLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        stepLabel.setForeground(buttonAccent);
+        contentPanel.add(stepLabel);
+
+        JLabel instructionLabel = new JLabel("<html>Take a slow sip of water. Sit comfortably with feet on the floor.<br>Let your shoulders relax.</html>");
+        instructionLabel.setFont(new Font("Arial", Font.PLAIN, 13));
+        instructionLabel.setForeground(new Color(200, 200, 200));
+        contentPanel.add(Box.createVerticalStrut(8));
+        contentPanel.add(instructionLabel);
+
+        JLabel timerLabel = new JLabel("0:30");
+        timerLabel.setFont(new Font("Arial", Font.BOLD, 48));
+        timerLabel.setForeground(buttonAccent);
+        timerLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        contentPanel.add(Box.createVerticalStrut(20));
+        contentPanel.add(timerLabel);
+
+        contentPanel.add(Box.createVerticalGlue());
+
+        JScrollPane scroll = new JScrollPane(contentPanel);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(Colors.PANEL_BG);
+        sessionFrame.add(scroll, BorderLayout.CENTER);
+
+        // Footer: control buttons
+        JPanel footerPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 12));
+        footerPanel.setBackground(Colors.PANEL_BG);
+
+        JButton pauseBtn = createStyledButton("Pause");
+        JButton exitBtn = createStyledButton("Exit");
+
+        pauseBtn.addActionListener(e -> {
+            // Placeholder for pause logic (can be implemented later)
+            showNotification("Pause", "Session paused. Click Resume to continue.", MessageType.INFO);
+        });
+
+        exitBtn.addActionListener(e -> sessionFrame.dispose());
+
+        footerPanel.add(pauseBtn);
+        footerPanel.add(exitBtn);
+        sessionFrame.add(footerPanel, BorderLayout.SOUTH);
+
+        sessionFrame.setVisible(true);
+
+        // Run the 4-step session in a background thread
+        runRelaxationSessionSteps(stepLabel, instructionLabel, timerLabel, sessionFrame);
+    }
+
+    /**
+     * Execute the 4-step relaxation session with live timer updates.
+     * Updates the UI labels in real-time as each step progresses.
+     */
+    private void runRelaxationSessionSteps(JLabel stepLabel, JLabel instructionLabel, JLabel timerLabel, JFrame sessionFrame) {
+        new Thread(() -> {
+            try {
+                // Step 1: Hydrate (30 seconds)
+                runStep(stepLabel, "Step 1: Hydrate & Settle",
+                       instructionLabel, "<html>Take a slow sip of water. Sit comfortably with feet on the floor.<br>Let your shoulders relax.</html>",
+                       timerLabel, 30);
+
+                // Step 2: Deep breathing (2 minutes)
+                runStep(stepLabel, "Step 2: Close Eyes & Breathe",
+                       instructionLabel, "<html>Close your eyes. Breathe: Inhale 4s - Hold 2s - Exhale 6s.<br>Keep repeating smoothly for 2 minutes.</html>",
+                       timerLabel, 120);
+
+                // Step 3: Shoulder rolls (90 seconds)
+                runStep(stepLabel, "Step 3: Shoulder & Neck Release",
+                       instructionLabel, "<html>Roll shoulders backward slowly (30s), then forward (30s),<br>then gentle neck tilts (30s). Avoid forcing movement.</html>",
+                       timerLabel, 90);
+
+                // Step 4: Stretch & refocus (60 seconds)
+                runStep(stepLabel, "Step 4: Stretch & Refocus",
+                       instructionLabel, "<html>Reach arms overhead and stretch gently. Take 3 slow grounding breaths.<br>Set your intention for focus.</html>",
+                       timerLabel, 60);
+
+                // Session complete
+                SwingUtilities.invokeLater(() -> {
+                    stepLabel.setText("Session Complete!");
+                    stepLabel.setForeground(new Color(46, 204, 113));
+                    instructionLabel.setText("<html>Well done! You've completed a 5-minute relaxation.<br>Notice how you feel and carry this calm into your work.</html>");
+                    timerLabel.setText("✓");
+                    timerLabel.setFont(new Font("Arial", Font.BOLD, 72));
+                    showNotification("Great Job!", 
+                                   "Relaxation session complete. You're now refreshed and ready!", 
+                                   MessageType.INFO);
+                });
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).start();
+    }
+
+    /**
+     * Run a single step of the relaxation session with a countdown timer.
+     */
+    private void runStep(JLabel stepLabel, String stepTitle,
+                        JLabel instructionLabel, String instruction,
+                        JLabel timerLabel, int durationSeconds) throws InterruptedException {
+        SwingUtilities.invokeLater(() -> {
+            stepLabel.setText(stepTitle);
+            instructionLabel.setText(instruction);
+        });
+
+        for (int remaining = durationSeconds; remaining >= 0; remaining--) {
+            final int sec = remaining;
+            SwingUtilities.invokeLater(() -> {
+                int minutes = sec / 60;
+                int seconds = sec % 60;
+                timerLabel.setText(String.format("%d:%02d", minutes, seconds));
+            });
+            Thread.sleep(1000);
+        }
+    }
+
     // textual header clock is used instead of a round clock (see clockLabel)
 
     /**
@@ -329,7 +634,10 @@ public class VirtualAssistantGUI extends JFrame {
     private void startReminderThread() {
         Thread reminder = new Thread(() -> {
             final Set<UUID> remindedStarts = Collections.synchronizedSet(new HashSet<>());
+            final Set<UUID> remindedEnds = Collections.synchronizedSet(new HashSet<>());
             long focusedStart = -1L;
+            boolean focusWarned = false; // true when 5-minute-before-break warning sent for current focus period
+            boolean relaxationPrompted = false; // true when relaxation dialog has been shown for current focus cycle
             while (true) {
                 try {
                     LocalDate today = LocalDate.now();
@@ -362,22 +670,62 @@ public class VirtualAssistantGUI extends JFrame {
                             }
                         }
 
+                        // Warn 5 minutes before task end (encourage short break)
+                        if (taskEnd != null && !remindedEnds.contains(t.getId())) {
+                            LocalDateTime endWarnAt = taskEnd.minusMinutes(5);
+                            if (!now.isBefore(endWarnAt) && now.isBefore(taskEnd)) {
+                                showNotification("Upcoming Task End",
+                                              "Task ending in 5 minutes: " + t.getTitle() + ". Consider a short break.",
+                                              MessageType.INFO);
+                                remindedEnds.add(t.getId());
+                            }
+                        }
+
                         if (!now.isBefore(taskStart) && now.isBefore(taskEnd)) {
                             anyTaskInProgress = true;
+                        }
+                    }
+
+                    // If user started a manual focus timer, treat as work in progress
+                    if (manualFocusRunning) {
+                        anyTaskInProgress = true;
+                        if (focusedStart == -1L) {
+                            // prefer the manual start time if available
+                            focusedStart = manualFocusStart != -1L ? manualFocusStart : Instant.now().getEpochSecond();
                         }
                     }
 
                     if (anyTaskInProgress) {
                         if (focusedStart == -1L) focusedStart = Instant.now().getEpochSecond();
                         long elapsedSeconds = Instant.now().getEpochSecond() - focusedStart;
+                        
+                        // Trigger relaxation session dialog at exactly 60 minutes of continuous work
+                        if (!relaxationPrompted && elapsedSeconds >= 60 * 60) {
+                            SwingUtilities.invokeLater(this::showRelaxationSessionDialog);
+                            relaxationPrompted = true;
+                        }
+                        
+                        // 5-minute-before-break warning (at 55 minutes)
+                        if (!focusWarned && elapsedSeconds >= 55 * 60 && elapsedSeconds < 60 * 60) {
+                            showNotification("Upcoming Break",
+                                          "You're approaching 1 hour of focus — break in 5 minutes.",
+                                          MessageType.INFO);
+                            focusWarned = true;
+                        }
+                        // Break notification at 60 minutes
                         if (elapsedSeconds >= 60 * 60) {
                             showNotification("Break Time",
-                                          "You've been focused for 1 hour. Take a 5-10 minute break!",
+                                          "You've been focused for 1 hour. Take a 5-minute break!",
                                           MessageType.WARNING);
+                            // reset focus start for next cycle
                             focusedStart = Instant.now().getEpochSecond();
+                            focusWarned = false; // allow next 55-min warning for the next hour
+                            relaxationPrompted = false; // allow next relaxation prompt for the next hour
                         }
                     } else {
                         focusedStart = -1L;
+                        focusWarned = false;
+                        relaxationPrompted = false;
                     }
 
                     Thread.sleep(30 * 1000);
@@ -643,7 +991,7 @@ public class VirtualAssistantGUI extends JFrame {
     private JLabel createLabel(String text) {
         JLabel label = new JLabel(text);
         label.setForeground(Color.WHITE);
-        label.setFont(new Font("Arial", Font.BOLD, 12));
+        label.setFont(new Font("Arial", Font.BOLD, 14));
         return label;
     }
 
@@ -713,7 +1061,7 @@ public class VirtualAssistantGUI extends JFrame {
             }
         };
         button.setForeground(Color.WHITE);
-        button.setFont(new Font("Arial", Font.BOLD, 12));
+        button.setFont(new Font("Arial", Font.BOLD, 14));
         button.setOpaque(false);
         button.setContentAreaFilled(false);
         button.setBorderPainted(false);
@@ -807,8 +1155,8 @@ public class VirtualAssistantGUI extends JFrame {
         headerPanel.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
         
         JLabel titleLabel = new JLabel("Your Schedule");
-        titleLabel.setForeground(Color.WHITE);
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 20));
+    titleLabel.setForeground(Color.WHITE);
+    titleLabel.setFont(new Font("Arial", Font.BOLD, 22));
         headerPanel.add(titleLabel, BorderLayout.WEST);
         
         // Date picker panel
