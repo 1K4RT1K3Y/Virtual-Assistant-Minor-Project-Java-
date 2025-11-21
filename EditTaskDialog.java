@@ -7,12 +7,12 @@ import java.time.format.DateTimeParseException;
 import java.time.format.DateTimeFormatter;
 
 public class EditTaskDialog extends JDialog {
-    private static final long serialVersionUID = 1L;
+    public static final long serialVersionUID = 1L;
 
-    private final JFrame parent;
-    private transient final Task task;
-    private final java.time.LocalDate taskDate;
-    private transient final Runnable onSave;
+    public final JFrame parent;
+    public transient final Task task;
+    public final java.time.LocalDate taskDate;
+    public transient final Runnable onSave;
 
     public EditTaskDialog(JFrame parent, Task task, java.time.LocalDate taskDate, Runnable onSave) {
         super((java.awt.Frame) null, "Edit Task", true);
@@ -108,8 +108,8 @@ public class EditTaskDialog extends JDialog {
     }
 
     // Static nested button class avoids 'this' escaping during construction
-    private static class StyledBtn extends JButton {
-        private static final long serialVersionUID = 1L;
+    public static class StyledBtn extends JButton {
+        public static final long serialVersionUID = 1L;
 
         public StyledBtn(String t, Color bg) {
             super(t);
