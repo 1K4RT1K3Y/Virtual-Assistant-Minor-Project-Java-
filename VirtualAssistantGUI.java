@@ -17,56 +17,37 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class VirtualAssistantGUI extends JFrame {
-    public static final long serialVersionUID = 1L;
-    public transient Map<LocalDate, List<Task>> schedules = new HashMap<>();
-    public String userName;
-    public JLabel clockLabel;
-    public JPanel mainPanel;
-    public transient TaskListPanel taskListPanel;
-    // Monthly stats persisted per user: map monthKey (YYYY-MM) -> int[]{completed,total}
-    public transient Map<String, int[]> monthlyStats = new HashMap<>();
-    public JLabel greetingLabel;
-    public Timer greetingHideTimer;
-    public Color accentColor = new Color(41, 128, 185); // RGB accent
+    private final Map<LocalDate, List<Task>> schedules = new HashMap<>();
+    private String userName;
+    private JLabel clockLabel;
+    private JPanel mainPanel;
+    private TaskListPanel taskListPanel;
+    private JLabel greetingLabel;
+    private Timer greetingHideTimer;
+    private Color accentColor = new Color(41, 128, 185); // RGB accent
     // Fixed accent for buttons (decoupled from RGB animation)
-    public final Color buttonAccent = new Color(41, 128, 185);
-    public Timer rgbTimer;
-    public float hue = 0;
-    public transient SystemTray tray;
-    public transient TrayIcon trayIcon;
+    private final Color buttonAccent = new Color(41, 128, 185);
+    private final Timer rgbTimer;
+    private float hue = 0;
+    private SystemTray tray;
+    private TrayIcon trayIcon;
     // Manual focus controls (user can start/stop a focus timer)
-    public volatile boolean manualFocusRunning = false;
-    public volatile long manualFocusStart = -1L;
-    public transient javax.swing.Timer manualFocusTimer;
-    public transient JLabel focusTimerLabel;
+    private volatile boolean manualFocusRunning = false;
+    private volatile long manualFocusStart = -1L;
 
     public static void main(String[] args) {
         try {
             // Set system look and feel with dark theme modifications
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             SwingUtilities.invokeLater(() -> {
-                VirtualAssistantGUI gui = new VirtualAssistantGUI();
-                gui.initAndShow();
+                new VirtualAssistantGUI().setVisible(true);
             });
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    /**
-     * Spawn a new Windows cmd terminal that compiles and runs the project.
-     * This opens a new console so the current GUI instance is not blocked.
-     */
-    // Run helper removed per user request (previously opened a new terminal to build+run)
-
     public VirtualAssistantGUI() {
-        // keep constructor minimal; full UI initialization happens in initAndShow()
-    }
-
-    /**
-     * Initialize UI components and display the window. Must be called on the EDT.
-     */
-    public void initAndShow() {
         setTitle("V A M P");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1000, 600);
@@ -78,15 +59,12 @@ public class VirtualAssistantGUI extends JFrame {
         // Set up the main panel with dark theme
         setupMainPanel();
 
-        // Prepare textual clock in header (timer not started yet)
-        javax.swing.Timer clockTimer = setupClock();
+        // Start textual clock in header
+        setupClock();
 
         // Setup RGB animation timer (kept for header accent only)
         rgbTimer = new Timer(50, e -> updateRGBEffect());
-
-        // start the header clock and RGB animation
-        if (clockTimer != null) clockTimer.start();
-        if (rgbTimer != null) rgbTimer.start();
+        rgbTimer.start();
 
         // Start the reminder thread
         startReminderThread();
@@ -96,22 +74,13 @@ public class VirtualAssistantGUI extends JFrame {
             ((javax.swing.Timer) ev.getSource()).stop();
             showStartupNameDialog();
         }).start();
-
-        setVisible(true);
-        // Save monthly stats on window close
-        addWindowListener(new java.awt.event.WindowAdapter() {
-            @Override
-            public void windowClosing(java.awt.event.WindowEvent e) {
-                saveMonthlyStatsForUser(userName);
-            }
-        });
     }
 
     /**
      * Initialize the system tray icon (if supported) and create a simple programmatic icon.
      * Runs on EDT during construction.
      */
-    public void setupSystemTray() {
+    private void setupSystemTray() {
         if (SystemTray.isSupported()) {
             tray = SystemTray.getSystemTray();
             // Create a simple icon programmatically
@@ -137,7 +106,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Show a desktop notification via system tray (if supported) and play a notification sound.
      */
-    public void showNotification(String title, String message, MessageType type) {
+    private void showNotification(String title, String message, MessageType type) {
         if (SystemTray.isSupported()) {
             trayIcon.displayMessage(title, message, type);
             playNotificationSound();
@@ -148,7 +117,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Play a local notification sound file if present (notification.wav).
      * Exceptions are swallowed to avoid breaking the UI thread.
      */
-    public void playNotificationSound() {
+    private void playNotificationSound() {
         try {
             File soundFile = new File("notification.wav");
             if (!soundFile.exists()) return;
@@ -164,7 +133,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Build the primary UI layout: header, task list panel and bottom buttons.
      */
-    public void setupMainPanel() {
+    private void setupMainPanel() {
     mainPanel = new JPanel(new BorderLayout());
     mainPanel.setBackground(Colors.BACKGROUND); // Dark background
 
@@ -225,24 +194,7 @@ public class VirtualAssistantGUI extends JFrame {
         addStyledButton(buttonPanel, "Add Task", this::showAddTaskDialog);
         addStyledButton(buttonPanel, "View Schedule", this::showViewScheduleDialog);
         addStyledButton(buttonPanel, "Launch App", this::showAppLauncherDialog);
-
-        // Focus controls: vertical stack with timer, small warning, and start/stop button
-        JPanel focusStack = new JPanel();
-        focusStack.setLayout(new BoxLayout(focusStack, BoxLayout.Y_AXIS));
-        focusStack.setBackground(Colors.PANEL_BG);
-
-        focusTimerLabel = new JLabel("00:00:00");
-        focusTimerLabel.setFont(new Font("Arial", Font.BOLD, 14));
-        focusTimerLabel.setForeground(Color.WHITE);
-        focusTimerLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        focusStack.add(focusTimerLabel);
-
-        JLabel focusWarning = new JLabel("(Tap Start Focus before beginning tasks)");
-        focusWarning.setFont(new Font("Arial", Font.PLAIN, 10));
-        focusWarning.setForeground(new Color(200, 200, 200));
-        focusWarning.setAlignmentX(Component.CENTER_ALIGNMENT);
-        focusStack.add(focusWarning);
-
+        // Add a manual focus toggle button to let user start a focus timer
         JButton focusBtn = new JButton("Start Focus");
         focusBtn.setFont(new Font("Arial", Font.BOLD, 14));
         focusBtn.setBackground(new Color(230, 126, 34)); // orange
@@ -252,46 +204,27 @@ public class VirtualAssistantGUI extends JFrame {
         focusBtn.setBorderPainted(false);
         focusBtn.setFocusPainted(false);
         focusBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        focusBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        // Timer that updates the focusTimerLabel every second while manualFocusRunning
-        manualFocusTimer = new javax.swing.Timer(1000, ev -> {
-            if (manualFocusRunning && manualFocusStart != -1L) {
-                long elapsed = Instant.now().getEpochSecond() - manualFocusStart;
-                long hrs = elapsed / 3600;
-                long mins = (elapsed % 3600) / 60;
-                long secs = elapsed % 60;
-                focusTimerLabel.setText(String.format("%02d:%02d:%02d", hrs, mins, secs));
-            }
-        });
-
         focusBtn.addActionListener(e -> {
             if (!manualFocusRunning) {
                 manualFocusRunning = true;
                 manualFocusStart = Instant.now().getEpochSecond();
                 focusBtn.setText("Stop Focus");
-                manualFocusTimer.start();
                 showNotification("Focus", "Manual focus timer started.", MessageType.INFO);
             } else {
                 manualFocusRunning = false;
                 manualFocusStart = -1L;
                 focusBtn.setText("Start Focus");
-                manualFocusTimer.stop();
-                focusTimerLabel.setText("00:00:00");
                 showNotification("Focus", "Manual focus timer stopped.", MessageType.INFO);
             }
         });
-
-        focusStack.add(Box.createVerticalStrut(6));
-        focusStack.add(focusBtn);
-        buttonPanel.add(focusStack);
+        buttonPanel.add(focusBtn);
 
         mainPanel.add(buttonPanel, BorderLayout.SOUTH);
 
         setContentPane(mainPanel);
     }
 
-    public void addStyledButton(JPanel panel, String text, ActionListener action) {
+    private void addStyledButton(JPanel panel, String text, ActionListener action) {
         JButton button = new JButton(text) {
             @Override
             protected void paintComponent(Graphics g) {
@@ -320,20 +253,20 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Start a Swing Timer to update the textual clock label every second.
      */
-    public Timer setupClock() {
+    private void setupClock() {
         Timer timer = new Timer(1000, e -> {
             LocalDateTime now = LocalDateTime.now();
             DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
             // Use fixed white color, no RGB
             clockLabel.setText(now.format(timeFormatter));
         });
-        return timer;
+        timer.start();
     }
 
     /**
      * Show a modal startup dialog to request the user's first name. Updates header greeting.
      */
-    public void showStartupNameDialog() {
+    private void showStartupNameDialog() {
         // Modal dialog asking for first name, shown after main window opens
         JDialog d = new JDialog(this, "Welcome", true);
         d.setLayout(new GridBagLayout());
@@ -354,7 +287,7 @@ public class VirtualAssistantGUI extends JFrame {
         gbc.gridy = 1; gbc.gridwidth = 2;
         d.add(fname, gbc);
 
-        JButton save = createStyledButton("Ok");
+        JButton save = createStyledButton("OK");
         JButton skip = createStyledButton("Skip");
 
         save.addActionListener(ev -> {
@@ -385,12 +318,10 @@ public class VirtualAssistantGUI extends JFrame {
      * Display a large welcome greeting using the provided name, then replace it
      * with a short phrase after a few seconds.
      */
-    public void showAndHideGreetingFromName(String fullName) {
+    private void showAndHideGreetingFromName(String fullName) {
         // Use first token as first name
         String first = fullName.split("\\s+")[0];
         userName = first;
-        // Load monthly stats for this user and refresh UI
-        loadMonthlyStatsForUser(userName);
         
         // Show big greeting in header immediately
         greetingLabel.setFont(new Font("Arial", Font.BOLD, 48));
@@ -412,7 +343,7 @@ public class VirtualAssistantGUI extends JFrame {
      * User can enable/disable break notifications and set preferences.
      * After this dialog closes, the relaxation session dialog appears.
      */
-    public void showBreakReminderDialog() {
+    private void showBreakReminderDialog() {
         JDialog d = new JDialog(this, "Break Reminder Setup", true);
         d.setLayout(new GridBagLayout());
         d.getContentPane().setBackground(Colors.PANEL_BG);
@@ -489,7 +420,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Show a startup dialog offering a guided 5-minute relaxation session.
      * User can Start, Skip, or Schedule for later.
      */
-    public void showRelaxationSessionDialog() {
+    private void showRelaxationSessionDialog() {
         JDialog d = new JDialog(this, "Relaxation Session", true);
         d.setLayout(new GridBagLayout());
         d.getContentPane().setBackground(Colors.PANEL_BG);
@@ -545,7 +476,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Show a window with the 5-minute guided relaxation session.
      * Displays step-by-step instructions with live countdown timers.
      */
-    public void showRelaxationSessionWindow() {
+    private void showRelaxationSessionWindow() {
         JFrame sessionFrame = new JFrame("Guided Relaxation Session");
         sessionFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         sessionFrame.setSize(500, 600);
@@ -622,7 +553,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Execute the 4-step relaxation session with live timer updates.
      * Updates the UI labels in real-time as each step progresses.
      */
-    public void runRelaxationSessionSteps(JLabel stepLabel, JLabel instructionLabel, JLabel timerLabel, JFrame sessionFrame) {
+    private void runRelaxationSessionSteps(JLabel stepLabel, JLabel instructionLabel, JLabel timerLabel, JFrame sessionFrame) {
         new Thread(() -> {
             try {
                 // Step 1: Hydrate (30 seconds)
@@ -663,71 +594,10 @@ public class VirtualAssistantGUI extends JFrame {
         }).start();
     }
 
-    // --- Monthly stats persistence helpers ---
-    public File statsFileForUser(String user) {
-        String home = System.getProperty("user.home");
-        String safe = user.replaceAll("[^A-Za-z0-9_.-]", "_");
-        // Store on the user's Desktop with a clear filename
-        File desktop = new File(home + File.separator + "Desktop");
-        return new File(desktop, safe + "_vamp_stats.txt");
-    }
-
-    public String monthKey(LocalDate date) {
-        return String.format("%d-%02d", date.getYear(), date.getMonthValue());
-    }
-
-    public synchronized void loadMonthlyStatsForUser(String user) {
-        monthlyStats.clear();
-        if (user == null || user.isEmpty()) return;
-        File f = statsFileForUser(user);
-        if (!f.exists()) return;
-        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-                String[] parts = line.split("\\s+");
-                if (parts.length >= 3) {
-                    String key = parts[0];
-                    int completed = Integer.parseInt(parts[1]);
-                    int total = Integer.parseInt(parts[2]);
-                    monthlyStats.put(key, new int[]{completed, total});
-                }
-            }
-        } catch (Exception ex) {
-            // ignore read errors
-        }
-    }
-
-    public synchronized void saveMonthlyStatsForUser(String user) {
-        if (user == null || user.isEmpty()) return;
-        File f = statsFileForUser(user);
-        try (PrintWriter w = new PrintWriter(new FileWriter(f))) {
-            for (Map.Entry<String, int[]> e : monthlyStats.entrySet()) {
-                int[] arr = e.getValue();
-                w.printf("%s %d %d\n", e.getKey(), arr[0], arr[1]);
-            }
-        } catch (Exception ex) {
-            // ignore write errors
-        }
-    }
-
-    public synchronized void adjustMonthlyCounts(LocalDate date, int deltaCompleted, int deltaTotal) {
-        if (userName == null || userName.isEmpty()) return;
-        String key = monthKey(date);
-        int[] cur = monthlyStats.getOrDefault(key, new int[]{0,0});
-        int newCompleted = Math.max(0, cur[0] + deltaCompleted);
-        int newTotal = Math.max(0, cur[1] + deltaTotal);
-        monthlyStats.put(key, new int[]{newCompleted, newTotal});
-        saveMonthlyStatsForUser(userName);
-        if (taskListPanel != null) taskListPanel.refresh();
-    }
-
-
     /**
      * Run a single step of the relaxation session with a countdown timer.
      */
-    public void runStep(JLabel stepLabel, String stepTitle,
+    private void runStep(JLabel stepLabel, String stepTitle,
                         JLabel instructionLabel, String instruction,
                         JLabel timerLabel, int durationSeconds) throws InterruptedException {
         SwingUtilities.invokeLater(() -> {
@@ -751,7 +621,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Update the dynamic header accent color (HSB hue rotation).
      */
-    public void updateRGBEffect() {
+    private void updateRGBEffect() {
         hue = (hue + 0.01f) % 1.0f;
         accentColor = Color.getHSBColor(hue, 0.8f, 0.9f);
         mainPanel.repaint();
@@ -761,7 +631,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Start a background daemon thread that periodically checks tasks and
      * shows reminders / break notifications when appropriate.
      */
-    public void startReminderThread() {
+    private void startReminderThread() {
         Thread reminder = new Thread(() -> {
             final Set<UUID> remindedStarts = Collections.synchronizedSet(new HashSet<>());
             final Set<UUID> remindedEnds = Collections.synchronizedSet(new HashSet<>());
@@ -872,7 +742,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Show the Add Task dialog (modal). Reads inputs and creates a Task on save.
      */
-    public void showAddTaskDialog(ActionEvent e) {
+    private void showAddTaskDialog(ActionEvent e) {
         JDialog dialog = new JDialog(this, "Add New Task", true);
         dialog.setLayout(new GridBagLayout());
     dialog.getContentPane().setBackground(Colors.PANEL_BG);
@@ -1001,9 +871,6 @@ public class VirtualAssistantGUI extends JFrame {
             List<Task> dateTasks = schedules.computeIfAbsent(date, k -> new ArrayList<>());
             dateTasks.add(task);
 
-            // Update monthly totals for the task's month
-            adjustMonthlyCounts(date, 0, 1);
-
             // Refresh main window progress/checklist
             if (taskListPanel != null) taskListPanel.refresh();
 
@@ -1031,7 +898,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Rebuild the list of tasks shown in the View Schedule dialog. Ensures rows
      * keep consistent sizing and that controls are attached to the correct task.
      */
-    public void rebuildTaskList(JPanel listPanel, LocalDate selectedDate, JPanel schedulePanel, JDialog dialog) {
+    private void rebuildTaskList(JPanel listPanel, LocalDate selectedDate, JPanel schedulePanel, JDialog dialog) {
         listPanel.removeAll();
         listPanel.setLayout(new BoxLayout(listPanel, BoxLayout.Y_AXIS));
         
@@ -1090,8 +957,6 @@ public class VirtualAssistantGUI extends JFrame {
                     rebuildTaskList(listPanel, selectedDate, schedulePanel, dialog);
                     if (taskListPanel != null) taskListPanel.refresh();
                 });
-                // initialize UI after construction to avoid 'this-escape' warnings
-                editDialog.init();
                 editDialog.setLocationRelativeTo(dialog);
                 editDialog.setVisible(true);
             });
@@ -1102,8 +967,6 @@ public class VirtualAssistantGUI extends JFrame {
                     "Confirm", 
                     JOptionPane.YES_NO_OPTION);
                 if (confirm == JOptionPane.YES_OPTION) {
-                    // adjust monthly counts before removal
-                    adjustMonthlyCounts(selectedDate, t.isDone() ? -1 : 0, -1);
                     List<Task> list = schedules.getOrDefault(selectedDate, new ArrayList<>());
                     list.removeIf(x -> x.getId().equals(t.getId()));
                     schedulePanel.repaint();
@@ -1125,14 +988,14 @@ public class VirtualAssistantGUI extends JFrame {
         listPanel.revalidate(); listPanel.repaint();
     }
 
-    public JLabel createLabel(String text) {
+    private JLabel createLabel(String text) {
         JLabel label = new JLabel(text);
         label.setForeground(Color.WHITE);
         label.setFont(new Font("Arial", Font.BOLD, 14));
         return label;
     }
 
-    public JTextField createStyledTextField() {
+    private JTextField createStyledTextField() {
         JTextField field = new JTextField(20) {
             @Override
             protected void paintComponent(Graphics g) {
@@ -1154,7 +1017,7 @@ public class VirtualAssistantGUI extends JFrame {
         return field;
     }
 
-    public void styleSpinnerEditor(JSpinner spinner) {
+    private void styleSpinnerEditor(JSpinner spinner) {
     spinner.setBackground(Colors.INPUT_BG);
     spinner.setForeground(Color.WHITE);
         spinner.setBorder(BorderFactory.createEmptyBorder());
@@ -1169,7 +1032,7 @@ public class VirtualAssistantGUI extends JFrame {
         }
     }
 
-    public JSpinner createStyledSpinner(SpinnerModel model) {
+    private JSpinner createStyledSpinner(SpinnerModel model) {
         JSpinner spinner = new JSpinner(model);
         styleSpinnerEditor(spinner);
 
@@ -1182,7 +1045,7 @@ public class VirtualAssistantGUI extends JFrame {
         return spinner;
     }
 
-    public JButton createStyledButton(String text) {
+    private JButton createStyledButton(String text) {
         JButton button = new JButton(text) {
             @Override
             protected void paintComponent(Graphics g) {
@@ -1211,7 +1074,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Show the View Schedule dialog which displays a timeline and editable list
      * of tasks for a selected date.
      */
-    public void showViewScheduleDialog(ActionEvent e) {
+    private void showViewScheduleDialog(ActionEvent e) {
         JDialog dialog = new JDialog(this, "View Schedule", true);
         dialog.setLayout(new BorderLayout());
         dialog.getContentPane().setBackground(new Color(24, 24, 24));
@@ -1370,7 +1233,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Ask user for an application name and launch it (non-blocking).
      */
-    public void showAppLauncherDialog(ActionEvent evt) {
+    private void showAppLauncherDialog(ActionEvent evt) {
         String appName = JOptionPane.showInputDialog(this, 
             "Enter application name to launch:", "Launch Application", 
             JOptionPane.QUESTION_MESSAGE);
@@ -1395,7 +1258,7 @@ public class VirtualAssistantGUI extends JFrame {
      * Try to launch an application by name. Uses several fallbacks on Windows
      * (known paths, registry App Paths, protocol handlers, cmd start).
      */
-    public void launchApplication(String appName) {
+    private void launchApplication(String appName) {
         try {
             String command = "";
             String os = System.getProperty("os.name").toLowerCase();
@@ -1571,7 +1434,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Recursively search a directory for an executable whose name contains the appName.
      */
-    public File findApplicationRecursive(File dir, String appName) {
+    private File findApplicationRecursive(File dir, String appName) {
         if (dir == null || !dir.exists()) return null;
         File[] files = dir.listFiles();
         if (files == null) return null;
@@ -1601,7 +1464,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Query Windows registry App Paths for a known exe and return the full path if found.
      */
-    public String queryRegistryAppPath(String exeName) {
+    private String queryRegistryAppPath(String exeName) {
         try {
             Process p = new ProcessBuilder("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + exeName, "/ve").start();
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
@@ -1623,7 +1486,7 @@ public class VirtualAssistantGUI extends JFrame {
     /**
      * Check whether a registry key exists (Windows only helper).
      */
-    public boolean registryHasKey(String key) {
+    private boolean registryHasKey(String key) {
         try {
             Process p = new ProcessBuilder("reg", "query", key).start();
             int exit = p.waitFor();
@@ -1634,12 +1497,9 @@ public class VirtualAssistantGUI extends JFrame {
     }
 
     // Custom TaskListPanel class for day-level progress and checklist
-    public class TaskListPanel extends JPanel {
-        public static final long serialVersionUID = 1L;
-        public final JProgressBar dayProgress;
-        public final JProgressBar monthlyProgress;
-        public final JLabel monthlyDetails;
-        public final JPanel checklistPanel;
+    private class TaskListPanel extends JPanel {
+        private final JProgressBar dayProgress;
+        private final JPanel checklistPanel;
 
         public TaskListPanel() {
             setBackground(new Color(24, 24, 24));
@@ -1650,63 +1510,28 @@ public class VirtualAssistantGUI extends JFrame {
             JPanel headerPanel = new JPanel(new BorderLayout(4, 4));
             headerPanel.setBackground(new Color(24,24,24));
             
-            // Left: Today's progress
-            JPanel left = new JPanel(new BorderLayout(4,4));
-            left.setBackground(new Color(24,24,24));
+            // Title label in header
             JLabel title = new JLabel("Today's Progress");
             title.setForeground(Color.WHITE);
             title.setFont(new Font("Arial", Font.BOLD, 16));
             title.setHorizontalAlignment(SwingConstants.CENTER);
-            // show today's date under the title
-            JPanel titleLeft = new JPanel(new BorderLayout());
-            titleLeft.setOpaque(false);
-            titleLeft.add(title, BorderLayout.NORTH);
-            JLabel todayDate = new JLabel(LocalDate.now().toString(), SwingConstants.CENTER);
-            todayDate.setForeground(new Color(200,200,200));
-            todayDate.setFont(new Font("Arial", Font.PLAIN, 12));
-            titleLeft.add(todayDate, BorderLayout.SOUTH);
-            left.add(titleLeft, BorderLayout.NORTH);
+            headerPanel.add(title, BorderLayout.SOUTH);
 
+            // Progress bar below title
             dayProgress = new JProgressBar(0, 100);
             dayProgress.setStringPainted(true);
             dayProgress.setForeground(new Color(41,128,185));
             dayProgress.setBackground(new Color(45,45,45));
             dayProgress.setPreferredSize(new Dimension(200, 36));
-            left.add(dayProgress, BorderLayout.CENTER);
 
-            // Right: Monthly progress
-            JPanel right = new JPanel(new BorderLayout(4,4));
-            right.setBackground(new Color(24,24,24));
-            JLabel mtitle = new JLabel("Monthly Progress");
-            mtitle.setForeground(Color.WHITE);
-            mtitle.setFont(new Font("Arial", Font.BOLD, 16));
-            mtitle.setHorizontalAlignment(SwingConstants.CENTER);
-            // show current month under the monthly title
-            JPanel titleRight = new JPanel(new BorderLayout());
-            titleRight.setOpaque(false);
-            titleRight.add(mtitle, BorderLayout.NORTH);
-            JLabel monthLabel = new JLabel(LocalDate.now().getYear() + "-" + String.format("%02d", LocalDate.now().getMonthValue()), SwingConstants.CENTER);
-            monthLabel.setForeground(new Color(200,200,200));
-            monthLabel.setFont(new Font("Arial", Font.PLAIN, 12));
-            titleRight.add(monthLabel, BorderLayout.SOUTH);
-            right.add(titleRight, BorderLayout.NORTH);
+            JPanel progressPanel = new JPanel(new BorderLayout());
+            progressPanel.setBackground(new Color(24,24,24));
+            progressPanel.add(dayProgress, BorderLayout.CENTER);
 
-            this.monthlyProgress = new JProgressBar(0, 100);
-            this.monthlyProgress.setStringPainted(true);
-            this.monthlyProgress.setForeground(new Color(46,204,113));
-            this.monthlyProgress.setBackground(new Color(45,45,45));
-            this.monthlyProgress.setPreferredSize(new Dimension(200, 36));
-            right.add(this.monthlyProgress, BorderLayout.CENTER);
-
-            this.monthlyDetails = new JLabel("", SwingConstants.CENTER);
-            this.monthlyDetails.setForeground(new Color(200,200,200));
-            this.monthlyDetails.setFont(new Font("Arial", Font.PLAIN, 12));
-            right.add(this.monthlyDetails, BorderLayout.SOUTH);
-
-            JPanel topPanel = new JPanel(new GridLayout(1,2,8,8));
+            JPanel topPanel = new JPanel(new BorderLayout(8, 8));
             topPanel.setBackground(new Color(24,24,24));
-            topPanel.add(left);
-            topPanel.add(right);
+            topPanel.add(headerPanel, BorderLayout.NORTH);
+            topPanel.add(progressPanel, BorderLayout.CENTER);
 
             add(topPanel, BorderLayout.NORTH);
 
@@ -1742,32 +1567,6 @@ public class VirtualAssistantGUI extends JFrame {
                 dayProgress.setValue(percent);
                 dayProgress.setString(percent + "% completed (" + done + "/" + total + ")");
 
-                // Update monthly progress display (for current month)
-                String key = monthKey(LocalDate.now());
-                int mDone = 0, mTotal = 0;
-                int[] arr = monthlyStats.get(key);
-                if (arr != null) {
-                    mDone = arr[0]; mTotal = arr[1];
-                } else {
-                    // fallback: compute from in-memory schedules
-                    for (Map.Entry<LocalDate, List<Task>> ent : schedules.entrySet()) {
-                        LocalDate d = ent.getKey();
-                        if (d.getYear() == LocalDate.now().getYear() && d.getMonthValue() == LocalDate.now().getMonthValue()) {
-                            for (Task tt : ent.getValue()) {
-                                mTotal++;
-                                if (tt.isDone()) mDone++;
-                            }
-                        }
-                    }
-                    // store fallback into monthlyStats so UI and persistence stay consistent
-                    monthlyStats.put(key, new int[]{mDone, mTotal});
-                    saveMonthlyStatsForUser(userName);
-                }
-                int mPercent = mTotal == 0 ? 0 : (int) Math.round(100.0 * mDone / mTotal);
-                monthlyProgress.setValue(mPercent);
-                monthlyProgress.setString(mPercent + "% completed (" + mDone + "/" + mTotal + ")");
-                monthlyDetails.setText("Current month: " + key);
-
                 for (Task t : todays) {
                     JCheckBox cb = new JCheckBox(t.getTitle() + (t.getStartTime()!=null? " ("+t.getStartTime().toString()+")":""));
                     cb.setSelected(t.isDone());
@@ -1775,11 +1574,8 @@ public class VirtualAssistantGUI extends JFrame {
                     cb.setForeground(t.isDone()? new Color(46,204,113): Color.WHITE);
                     cb.setFont(new Font("Arial", Font.PLAIN, 13));
                     cb.addActionListener(e -> {
-                        boolean newState = cb.isSelected();
-                        // adjust monthly counts for today's date
-                        t.setDone(newState);
-                        cb.setForeground(newState? new Color(46,204,113): Color.WHITE);
-                        adjustMonthlyCounts(LocalDate.now(), newState ? 1 : -1, 0);
+                        t.setDone(cb.isSelected());
+                        cb.setForeground(cb.isSelected()? new Color(46,204,113): Color.WHITE);
                         refresh();
                     });
                     JPanel row = new JPanel(new BorderLayout());
