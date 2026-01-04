@@ -1,4 +1,4 @@
-# VAMP — GUI Pseudocode
+# VAMP — Concise GUI Pseudocode
 
 Overview
 - Java Swing GUI to add/view/edit daily tasks, send reminders, and show notifications.
